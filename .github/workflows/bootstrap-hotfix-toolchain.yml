@@ -59,8 +59,8 @@ jobs:
           package nz.tylerparker.warm; final class Warm {}
           EOF
           "$RUNNER_TEMP/gradle/gradle-9.3.1/bin/gradle" -p "$RUNNER_TEMP/warm" --no-daemon :app:assembleDebug :app:testDebugUnitTest
-          mkdir -p "$RUNNER_TEMP/lavs-bundle/gradle" "$RUNNER_TEMP/lavs-bundle/gradle-home"
-          cp -a "$RUNNER_TEMP/gradle/gradle-9.3.1" "$RUNNER_TEMP/lavs-bundle/gradle/"
+          mkdir -p "$RUNNER_TEMP/lavs-bundle/gradle" "$RUNNER_TEMP/lavs-bundle/gradle-home" "$RUNNER_TEMP/lavs-bundle/java"
+          cp -a "$RUNNER_TEMP/gradle/gradle-9.3.1" "$RUNNER_TEMP/lavs-bundle/gradle/"\n          cp -a "$JAVA_HOME" "$RUNNER_TEMP/lavs-bundle/java/jdk-17"
           cp -a "$GRADLE_USER_HOME/caches" "$RUNNER_TEMP/lavs-bundle/gradle-home/"
           cp -a "$GRADLE_USER_HOME/native" "$RUNNER_TEMP/lavs-bundle/gradle-home/" 2>/dev/null || true
           for p in platforms/android-36 build-tools/36.0.0 ndk/28.2.13676358 cmake/3.22.1 licenses; do
