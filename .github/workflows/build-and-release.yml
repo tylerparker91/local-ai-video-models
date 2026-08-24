@@ -1,0 +1,176 @@
+name: Build and publish Android model package
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-and-release.yml"
+      - "exporters/**"
+      - "patches/**"
+      - "requirements-export.txt"
+      - "expected-models.json"
+      - "verify_artifacts.py"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-models-v1
+  cancel-in-progress: false
+
+jobs:
+  build-verify-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      RELEASE_TAG: models-v1.0.0
+      MOBILEI2V_COMMIT: 8d0a253c766b05a43ba408baf5e8f800a36be8b4
+      TURBO_VAED_COMMIT: 6bd3adf679f140abb7d87fe183ae69e54bf64a7f
+
+    steps:
+      - name: Check out release infrastructure
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Reclaim runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+
+      - name: Install pinned export environment
+        run: |
+          python -m pip install --upgrade "pip==25.1.1"
+          python -m pip install \
+            --index-url https://download.pytorch.org/whl/cpu \
+            "torch==2.7.1" "torchvision==0.22.1"
+          python -m pip install -r requirements-export.txt
+          python - <<'PY'
+          import diffusers, onnx, torch, transformers
+          print(f"torch={torch.__version__}")
+          print(f"onnx={onnx.__version__}")
+          print(f"diffusers={diffusers.__version__}")
+          print(f"transformers={transformers.__version__}")
+          PY
+
+      - name: Fetch pinned exporter source trees
+        run: |
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/hustvl/MobileI2V.git sources/MobileI2V
+          git -C sources/MobileI2V sparse-checkout init --cone
+          git -C sources/MobileI2V sparse-checkout set diffusion
+          git -C sources/MobileI2V checkout "$MOBILEI2V_COMMIT"
+          test "$(git -C sources/MobileI2V rev-parse HEAD)" = "$MOBILEI2V_COMMIT"
+          git -C sources/MobileI2V apply "$GITHUB_WORKSPACE/patches/mobilei2v-export.patch"
+
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/hustvl/Turbo-VAED.git sources/Turbo-VAED
+          git -C sources/Turbo-VAED sparse-checkout init --cone
+          git -C sources/Turbo-VAED sparse-checkout set diffusers_vae/src/diffusers configs
+          git -C sources/Turbo-VAED checkout "$TURBO_VAED_COMMIT"
+          test "$(git -C sources/Turbo-VAED rev-parse HEAD)" = "$TURBO_VAED_COMMIT"
+
+      - name: Export LTX image encoder
+        run: |
+          mkdir -p inputs/ltx-vae artifacts
+          curl --fail --location --retry 5 --retry-all-errors --continue-at - \
+            --output inputs/ltx-vae/config.json \
+            https://huggingface.co/Lightricks/LTX-Video/resolve/8984fa25007f376c1a299016d0957a37a2f797bb/vae/config.json
+          curl --fail --location --retry 5 --retry-all-errors --continue-at - \
+            --output inputs/ltx-vae/diffusion_pytorch_model.safetensors \
+            https://huggingface.co/Lightricks/LTX-Video/resolve/8984fa25007f376c1a299016d0957a37a2f797bb/vae/diffusion_pytorch_model.safetensors
+          echo "e8f12ad5305b1508f6e456797d48ab8e9fdd091c686ccf814a293ee96ce89dbb  inputs/ltx-vae/config.json" | sha256sum --check
+          echo "265ca87cb5dff5e37f924286e957324e282fe7710a952a7dafc0df43883e2010  inputs/ltx-vae/diffusion_pytorch_model.safetensors" | sha256sum --check
+          test "$(stat -c %s inputs/ltx-vae/diffusion_pytorch_model.safetensors)" = "1676798532"
+          python exporters/export_mobilei2v_vae.py \
+            --component encoder \
+            --model-dir inputs/ltx-vae \
+            --output artifacts/mobilei2v_ltx_encoder_fp16.onnx
+          rm -rf inputs/ltx-vae
+
+      - name: Export portrait and landscape denoisers
+        run: |
+          mkdir -p inputs
+          curl --fail --location --retry 5 --retry-all-errors --continue-at - \
+            --output inputs/hybrid_371.pth \
+            https://huggingface.co/hustvl/MobileI2V/resolve/e8988a801eed109a957457e01db2ee0b213ca14e/hybrid_371.pth
+          echo "bc6a545302b342b87d83a4d78e9b74d47ca59fbf908fd8e13d9ecedbe1a37f2d  inputs/hybrid_371.pth" | sha256sum --check
+          test "$(stat -c %s inputs/hybrid_371.pth)" = "1074370038"
+          python exporters/export_mobilei2v_denoiser.py \
+            --source-root sources/MobileI2V \
+            --checkpoint inputs/hybrid_371.pth \
+            --orientation portrait \
+            --output artifacts/mobilei2v_denoiser_portrait_fp16.onnx
+          python exporters/export_mobilei2v_denoiser.py \
+            --source-root sources/MobileI2V \
+            --checkpoint inputs/hybrid_371.pth \
+            --orientation landscape \
+            --output artifacts/mobilei2v_denoiser_landscape_fp16.onnx
+          rm inputs/hybrid_371.pth
+
+      - name: Export Turbo-VAED neural decoder
+        run: |
+          mkdir -p inputs
+          curl --fail --location --retry 5 --retry-all-errors --continue-at - \
+            --output inputs/Turbo-VAED-LTX.pth \
+            https://huggingface.co/hustvl/Turbo-VAED/resolve/122de7b488a7109b453fc9a5c05d23e363dffbbf/Turbo-VAED-LTX.pth
+          echo "9d570c27e257bf38dd464839335a228893e0a337d518772abb39044c4092a64d  inputs/Turbo-VAED-LTX.pth" | sha256sum --check
+          test "$(stat -c %s inputs/Turbo-VAED-LTX.pth)" = "169190033"
+          python exporters/export_mobilei2v_vae.py \
+            --component decoder \
+            --source-root sources/Turbo-VAED \
+            --config sources/Turbo-VAED/configs/Turbo-VAED-LTX.json \
+            --checkpoint inputs/Turbo-VAED-LTX.pth \
+            --output artifacts/mobilei2v_turbo_decoder_fp16.onnx
+          rm inputs/Turbo-VAED-LTX.pth
+
+      - name: Verify accepted output identities
+        run: |
+          python verify_artifacts.py \
+            --manifest expected-models.json \
+            --directory artifacts \
+            --write-sums artifacts/SHA256SUMS.txt
+
+      - name: Create release and upload verified assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Local AI Video Studio models v1.0.0" \
+              --notes "Checksum-locked Android deployment artifacts. See repository notices and expected-models.json."
+          fi
+          gh release upload "$RELEASE_TAG" \
+            artifacts/mobilei2v_ltx_encoder_fp16.onnx \
+            artifacts/mobilei2v_denoiser_portrait_fp16.onnx \
+            artifacts/mobilei2v_denoiser_landscape_fp16.onnx \
+            artifacts/mobilei2v_turbo_decoder_fp16.onnx \
+            artifacts/SHA256SUMS.txt \
+            expected-models.json \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Re-download release anonymously and verify again
+        run: |
+          mkdir -p published
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$RELEASE_TAG"
+          for file in \
+            mobilei2v_ltx_encoder_fp16.onnx \
+            mobilei2v_denoiser_portrait_fp16.onnx \
+            mobilei2v_denoiser_landscape_fp16.onnx \
+            mobilei2v_turbo_decoder_fp16.onnx; do
+            curl --fail --location --retry 8 --retry-all-errors --continue-at - \
+              --output "published/$file" "$base/$file"
+          done
+          python verify_artifacts.py \
+            --manifest expected-models.json \
+            --directory published
+          printf '%s\n' "$base/mobilei2v_ltx_encoder_fp16.onnx"
+          printf '%s\n' "$base/mobilei2v_denoiser_portrait_fp16.onnx"
+          printf '%s\n' "$base/mobilei2v_denoiser_landscape_fp16.onnx"
+          printf '%s\n' "$base/mobilei2v_turbo_decoder_fp16.onnx"
