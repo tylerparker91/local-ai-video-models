@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "version": "1.0.0",
+  "artifacts": [
+    {
+      "file": "mobilei2v_ltx_encoder_fp16.onnx",
+      "bytes": 361060006,
+      "sha256": "ca06d486bf83d101f467d1268624bf3991a7bcd53a2968ec32ddb15bbfbb0b30"
+    },
+    {
+      "file": "mobilei2v_denoiser_portrait_fp16.onnx",
+      "bytes": 530982549,
+      "sha256": "5583fbd5e8e86ba2f3adf72cfd7412bc399eb9463dc06cca36afa851802efa56"
+    },
+    {
+      "file": "mobilei2v_denoiser_landscape_fp16.onnx",
+      "bytes": 530915831,
+      "sha256": "2a39f6e5bc896e3a2b16dede242aa81a9c050a20d922784902c0c6f5309a79c5"
+    },
+    {
+      "file": "mobilei2v_turbo_decoder_fp16.onnx",
+      "bytes": 84078521,
+      "sha256": "de7ddb04bae47e0e5ef1fd5ed500b60bde79e933287e90255358943bf54ebbb9"
+    }
+  ]
+}
