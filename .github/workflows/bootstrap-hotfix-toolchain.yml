@@ -3,6 +3,9 @@ on:
   push:
     paths:
       - ".github/workflows/bootstrap-hotfix-toolchain.yml"
+  pull_request:
+    paths:
+      - ".github/toolchain-trigger"
   workflow_dispatch:
 permissions:
   contents: read
