@@ -1,0 +1,122 @@
+name: Current Local AI Video Studio toolchain bootstrap
+on:
+  push:
+    branches:
+      - "agent/2026-08-29/toolchain-bootstrap"
+    paths:
+      - ".github/workflows/bootstrap-current-toolchain.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install and warm exact toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GRADLE_USER_HOME="$RUNNER_TEMP/lavs-gradle-home"
+          mkdir -p "$GRADLE_USER_HOME" "$RUNNER_TEMP/lavs-bundle/android-sdk"
+          curl -fL --retry 5 -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-9.3.1-bin.zip
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP/gradle"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;28.2.13676358" \
+            "cmake;3.22.1"
+          mkdir -p "$RUNNER_TEMP/warm/app/src/main/java/nz/tylerparker/warm"
+          cat > "$RUNNER_TEMP/warm/settings.gradle.kts" <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name = "warm"
+          include(":app")
+          EOF
+          cat > "$RUNNER_TEMP/warm/build.gradle.kts" <<'EOF'
+          plugins { id("com.android.application") version "9.1.1" apply false }
+          EOF
+          cat > "$RUNNER_TEMP/warm/app/build.gradle.kts" <<'EOF'
+          plugins { id("com.android.application") }
+          android {
+            namespace = "nz.tylerparker.warm"
+            compileSdk = 36
+            defaultConfig { applicationId = "nz.tylerparker.warm"; minSdk = 28; targetSdk = 36 }
+            compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+          }
+          dependencies {
+            implementation("com.microsoft.onnxruntime:onnxruntime-android:1.29.0")
+            testImplementation("junit:junit:4.13.2")
+            testImplementation("org.json:json:20240303")
+          }
+          EOF
+          cat > "$RUNNER_TEMP/warm/app/src/main/AndroidManifest.xml" <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"><application /></manifest>
+          EOF
+          cat > "$RUNNER_TEMP/warm/app/src/main/java/nz/tylerparker/warm/Warm.java" <<'EOF'
+          package nz.tylerparker.warm; final class Warm {}
+          EOF
+          "$RUNNER_TEMP/gradle/gradle-9.3.1/bin/gradle" -p "$RUNNER_TEMP/warm" --no-daemon :app:assembleDebug :app:testDebugUnitTest
+          mkdir -p "$RUNNER_TEMP/lavs-bundle/gradle" "$RUNNER_TEMP/lavs-bundle/gradle-home" "$RUNNER_TEMP/lavs-bundle/java/jdk-17"
+          cp -a "$RUNNER_TEMP/gradle/gradle-9.3.1" "$RUNNER_TEMP/lavs-bundle/gradle/"
+          cp -aL "$JAVA_HOME/." "$RUNNER_TEMP/lavs-bundle/java/jdk-17/"
+          cp -a "$GRADLE_USER_HOME/caches" "$RUNNER_TEMP/lavs-bundle/gradle-home/"
+          cp -a "$GRADLE_USER_HOME/native" "$RUNNER_TEMP/lavs-bundle/gradle-home/" 2>/dev/null || true
+          for p in platforms/android-36 build-tools/36.0.0 ndk/28.2.13676358 cmake/3.22.1 licenses; do
+            mkdir -p "$RUNNER_TEMP/lavs-bundle/android-sdk/$(dirname "$p")"
+            cp -a "$ANDROID_HOME/$p" "$RUNNER_TEMP/lavs-bundle/android-sdk/$p"
+          done
+          tar --zstd -cf "$RUNNER_TEMP/lavs-toolchain.tar.zst" -C "$RUNNER_TEMP" lavs-bundle
+          mkdir -p "$RUNNER_TEMP/parts"
+          split --bytes=350M --numeric-suffixes=0 --suffix-length=2 \
+            "$RUNNER_TEMP/lavs-toolchain.tar.zst" "$RUNNER_TEMP/parts/lavs-toolchain.part-"
+          {
+            sha256sum "$RUNNER_TEMP/lavs-toolchain.tar.zst"
+            sha256sum "$RUNNER_TEMP/parts/"*
+          } > "$RUNNER_TEMP/parts/SHA256SUMS.txt"
+          cat "$RUNNER_TEMP/parts/SHA256SUMS.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lavs-toolchain-part-00
+          path: ${{ runner.temp }}/parts/lavs-toolchain.part-00
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lavs-toolchain-part-01
+          path: ${{ runner.temp }}/parts/lavs-toolchain.part-01
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lavs-toolchain-part-02
+          path: ${{ runner.temp }}/parts/lavs-toolchain.part-02
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lavs-toolchain-part-03
+          path: ${{ runner.temp }}/parts/lavs-toolchain.part-03
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lavs-toolchain-part-04
+          path: ${{ runner.temp }}/parts/lavs-toolchain.part-04
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lavs-toolchain-checksums
+          path: ${{ runner.temp }}/parts/SHA256SUMS.txt
+          retention-days: 1
